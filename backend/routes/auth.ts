@@ -1,0 +1,149 @@
+import express from "express";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import { prisma } from "../lib/prisma";
+import { generateUniqueSlug } from "../lib/slug";
+import { AuthedRequest, requireAuth } from "../middleware/auth";
+
+const router = express.Router();
+
+router.post("/signup", async (req, res) => {
+  try {
+    const { businessName, email, password } = req.body;
+
+    if (
+      typeof businessName !== "string" ||
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !businessName.trim() ||
+      !email.trim() ||
+      password.length < 8
+    ) {
+      return res.status(400).json({
+        message:
+          "businessName and email are required, and password must be at least 8 characters",
+      });
+    }
+
+    const existingMerchant = await prisma.merchant.findUnique({
+      where: {
+        email,
+      },
+    });
+
+    if (existingMerchant) {
+      return res.status(400).json({
+        message: "Email already registered",
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const slug = await generateUniqueSlug(businessName);
+
+    const merchant = await prisma.merchant.create({
+      data: {
+        businessName,
+        slug,
+        email,
+        passwordHash,
+      },
+    });
+
+    return res.status(201).json({
+      message: "Merchant created successfully",
+      merchant: {
+        id: merchant.id,
+        businessName: merchant.businessName,
+        slug: merchant.slug,
+        email: merchant.email,
+      },
+    });
+  } catch (error) {
+    console.error("Signup error:", error);
+
+    return res.status(500).json({
+      message: "Something went wrong",
+    });
+  }
+});
+
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (typeof email !== "string" || typeof password !== "string") {
+      return res.status(400).json({
+        message: "email and password are required",
+      });
+    }
+
+    const merchant = await prisma.merchant.findUnique({
+      where: {
+        email,
+      },
+    });
+
+    // Same message whether the email is unknown or the password is wrong,
+    // so we don't leak which emails are registered.
+    if (
+      !merchant ||
+      !(await bcrypt.compare(password, merchant.passwordHash))
+    ) {
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
+    }
+
+    const token = jwt.sign(
+      { merchantId: merchant.id },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    return res.status(200).json({
+      message: "Logged in successfully",
+      token,
+      merchant: {
+        id: merchant.id,
+        businessName: merchant.businessName,
+        slug: merchant.slug,
+        email: merchant.email,
+      },
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+
+    return res.status(500).json({
+      message: "Something went wrong",
+    });
+  }
+});
+
+router.get("/me", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: req.merchantId },
+    });
+
+    if (!merchant) {
+      return res.status(404).json({ message: "Merchant not found" });
+    }
+
+    return res.status(200).json({
+      merchant: {
+        id: merchant.id,
+        businessName: merchant.businessName,
+        slug: merchant.slug,
+        email: merchant.email,
+      },
+    });
+  } catch (error) {
+    console.error("Me error:", error);
+
+    return res.status(500).json({
+      message: "Something went wrong",
+    });
+  }
+});
+
+export default router;

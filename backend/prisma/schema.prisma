@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Merchant {
+  id           String        @id @default(uuid())
+  businessName String
+  slug         String        @unique
+  email        String        @unique
+  passwordHash String
+  createdAt    DateTime      @default(now())
+
+  transactions Transaction[]
+}
+
+model Transaction {
+  id            String   @id @default(uuid())
+  merchantId    String
+  amount        Decimal
+  paymentMethod String
+  status        String
+  pidx          String?  @unique
+  createdAt     DateTime @default(now())
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+}
