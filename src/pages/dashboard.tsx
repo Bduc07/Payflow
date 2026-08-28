@@ -1,31 +1,5 @@
 import { useEffect, useState } from "react";
-
-type TransactionStatus = "Success" | "Pending" | "Refunded";
-type PaymentMethod = "QR" | "Card" | "Wallet";
-type NavItem = "Dashboard" | "Transactions" | "Activity" | "Settings";
-
-interface StatCard {
-  label: string;
-  value: string;
-  tone?: "success" | "warning";
-}
-
-interface MethodBreakdown {
-  method: PaymentMethod;
-  amount: string;
-}
-
-interface Transaction {
-  ref: string;
-  method: PaymentMethod;
-  amount: string;
-  status: TransactionStatus;
-}
-
-interface ActivityEntry {
-  time: string;
-  text: string;
-}
+import RevenueChart from "../components/RevenueChart";
 
 interface Merchant {
   id: string;
@@ -34,53 +8,31 @@ interface Merchant {
   email: string;
 }
 
+interface Transaction {
+  id: string;
+  amount: number;
+  paymentMethod: string;
+  status: string;
+  createdAt: string;
+}
+
 interface DashboardProps {
   onUnauthorized: () => void;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  "Dashboard",
-  "Transactions",
-  "Activity",
-  "Settings",
-];
-
-const STATS: StatCard[] = [
-  { label: "Revenue today", value: "Rs 48,250" },
-  { label: "Transactions", value: "142" },
-  { label: "Success rate", value: "96%", tone: "success" },
-  { label: "Pending", value: "5", tone: "warning" },
-];
-
-const METHOD_BREAKDOWN: MethodBreakdown[] = [
-  { method: "QR", amount: "Rs 26,100" },
-  { method: "Card", amount: "Rs 14,800" },
-  { method: "Wallet", amount: "Rs 7,350" },
-];
-
-const TRANSACTIONS: Transaction[] = [
-  { ref: "TX1032", method: "QR", amount: "Rs 500", status: "Success" },
-  { ref: "TX1031", method: "Card", amount: "Rs 1,200", status: "Success" },
-  { ref: "TX1030", method: "Wallet", amount: "Rs 350", status: "Pending" },
-  { ref: "TX1029", method: "QR", amount: "Rs 890", status: "Refunded" },
-];
-
-const ACTIVITY: ActivityEntry[] = [
-  { time: "10:32", text: "Transaction TX1032 created" },
-  { time: "10:30", text: "TX1031 marked successful" },
-  { time: "10:21", text: "Merchant logged in" },
-  { time: "09:58", text: "TX1029 refunded" },
-];
-
-const STATUS_STYLES: Record<TransactionStatus, React.CSSProperties> = {
-  Success: { backgroundColor: "#123420", color: "#4ade80" },
-  Pending: { backgroundColor: "#3a2a06", color: "#f5b642" },
-  Refunded: { backgroundColor: "#3a1414", color: "#f87171" },
+const STATUS_STYLES: Record<string, React.CSSProperties> = {
+  success: { backgroundColor: "#123420", color: "#4ade80" },
+  pending: { backgroundColor: "#3a2a06", color: "#f5b642" },
+  failed: { backgroundColor: "#3a1414", color: "#f87171" },
 };
 
+function formatRs(amount: number): string {
+  return `Rs ${amount.toLocaleString("en-US")}`;
+}
+
 export default function Dashboard({ onUnauthorized }: DashboardProps) {
-  const [activeNav, setActiveNav] = useState<NavItem>("Dashboard");
   const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [linkCopied, setLinkCopied] = useState(false);
 
   useEffect(() => {
@@ -91,22 +43,50 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
       return;
     }
 
-    fetch("/api/auth/me", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(async (res) => {
-        if (!res.ok) {
+    // Sequenced rather than fired concurrently: two simultaneous requests
+    // each needing their own database connection add real latency over a
+    // pooled remote Postgres connection (Neon), especially over a slow link.
+    // `cancelled` also guards against React StrictMode's dev-only double
+    // effect invocation, so the first (soon-discarded) run doesn't still
+    // fire its own /transactions call after being superseded.
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const meRes = await fetch("/api/auth/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled) return;
+
+        if (!meRes.ok) {
           localStorage.removeItem("token");
           localStorage.removeItem("merchant");
           onUnauthorized();
           return;
         }
-        const data = await res.json();
-        setMerchant(data.merchant);
-      })
-      .catch(() => {
-        onUnauthorized();
-      });
+
+        const meData = await meRes.json();
+        if (cancelled) return;
+        setMerchant(meData.merchant);
+
+        const txRes = await fetch("/api/transactions", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled) return;
+
+        if (txRes.ok) {
+          const txData = await txRes.json();
+          if (cancelled) return;
+          setTransactions(txData.transactions);
+        }
+      } catch {
+        if (!cancelled) onUnauthorized();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [onUnauthorized]);
 
   const handleCopyLink = async () => {
@@ -123,27 +103,24 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
     month: "long",
   });
 
+  const isToday = (createdAt: string) =>
+    new Date(createdAt).toDateString() === new Date().toDateString();
+
+  const successful = transactions.filter((tx) => tx.status === "success");
+  const pending = transactions.filter((tx) => tx.status === "pending");
+  const revenueToday = successful
+    .filter((tx) => isToday(tx.createdAt))
+    .reduce((sum, tx) => sum + tx.amount, 0);
+  const successRate =
+    transactions.length === 0
+      ? null
+      : Math.round((successful.length / transactions.length) * 100);
+
   return (
     <div style={styles.page}>
-      <aside style={styles.sidebar}>
-        <div style={styles.brand}>PayHub</div>
-        <nav style={styles.nav}>
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item}
-              onClick={() => setActiveNav(item)}
-              style={{
-                ...styles.navItem,
-                ...(item === activeNav ? styles.navItemActive : {}),
-              }}
-            >
-              {item}
-            </button>
-          ))}
-        </nav>
-      </aside>
-
       <main style={styles.main}>
+        <div style={styles.brand}>PayHub</div>
+
         <header style={styles.header}>
           <div>
             <h1 style={styles.greeting}>
@@ -159,64 +136,59 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
         </header>
 
         <section style={styles.statGrid}>
-          {STATS.map((stat) => (
-            <div
-              key={stat.label}
-              style={{
-                ...styles.statCard,
-                ...(stat.tone === "success" ? styles.statCardSuccess : {}),
-                ...(stat.tone === "warning" ? styles.statCardWarning : {}),
-              }}
-            >
-              <p style={styles.statLabel}>{stat.label}</p>
-              <p
-                style={{
-                  ...styles.statValue,
-                  ...(stat.tone === "success" ? { color: "#4ade80" } : {}),
-                  ...(stat.tone === "warning" ? { color: "#f5b642" } : {}),
-                }}
-              >
-                {stat.value}
-              </p>
-            </div>
-          ))}
-        </section>
-
-        <section>
-          <h2 style={styles.sectionHeading}>By payment method</h2>
-          <div style={styles.methodRow}>
-            {METHOD_BREAKDOWN.map((item) => (
-              <div key={item.method} style={styles.methodItem}>
-                <p style={styles.methodLabel}>{item.method}</p>
-                <p style={styles.methodAmount}>{item.amount}</p>
-              </div>
-            ))}
+          <div style={styles.statCard}>
+            <p style={styles.statLabel}>Revenue today</p>
+            <p style={styles.statValue}>{formatRs(revenueToday)}</p>
+          </div>
+          <div style={styles.statCard}>
+            <p style={styles.statLabel}>Transactions</p>
+            <p style={styles.statValue}>{transactions.length}</p>
+          </div>
+          <div style={{ ...styles.statCard, ...styles.statCardSuccess }}>
+            <p style={styles.statLabel}>Success rate</p>
+            <p style={{ ...styles.statValue, color: "#4ade80" }}>
+              {successRate === null ? "—" : `${successRate}%`}
+            </p>
+          </div>
+          <div style={{ ...styles.statCard, ...styles.statCardWarning }}>
+            <p style={styles.statLabel}>Pending</p>
+            <p style={{ ...styles.statValue, color: "#f5b642" }}>
+              {pending.length}
+            </p>
           </div>
         </section>
 
-        <section style={styles.bottomGrid}>
-          <div>
-            <h2 style={styles.sectionHeading}>Recent transactions</h2>
+        <RevenueChart transactions={transactions} />
+
+        <section>
+          <h2 style={styles.sectionHeading}>Recent transactions</h2>
+          {transactions.length === 0 ? (
+            <p style={styles.emptyText}>
+              No transactions yet. Share your checkout link to get started.
+            </p>
+          ) : (
             <table style={styles.table}>
               <thead>
                 <tr>
-                  <th style={styles.th}>Merchant ref</th>
+                  <th style={styles.th}>Ref</th>
                   <th style={styles.th}>Method</th>
                   <th style={styles.th}>Amount</th>
                   <th style={styles.th}>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {TRANSACTIONS.map((tx) => (
-                  <tr key={tx.ref}>
-                    <td style={styles.td}>{tx.ref}</td>
-                    <td style={styles.td}>{tx.method}</td>
-                    <td style={styles.td}>{tx.amount}</td>
+                {transactions.map((tx) => (
+                  <tr key={tx.id}>
+                    <td style={styles.td}>{tx.id.slice(0, 8)}</td>
+                    <td style={{ ...styles.td, textTransform: "capitalize" }}>
+                      {tx.paymentMethod}
+                    </td>
+                    <td style={styles.td}>{formatRs(tx.amount)}</td>
                     <td style={styles.td}>
                       <span
                         style={{
                           ...styles.statusBadge,
-                          ...STATUS_STYLES[tx.status],
+                          ...(STATUS_STYLES[tx.status] ?? {}),
                         }}
                       >
                         {tx.status}
@@ -226,22 +198,7 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
                 ))}
               </tbody>
             </table>
-          </div>
-
-          <div>
-            <h2 style={styles.sectionHeading}>Activity</h2>
-            <ul style={styles.activityList}>
-              {ACTIVITY.map((entry) => (
-                <li
-                  key={`${entry.time}-${entry.text}`}
-                  style={styles.activityItem}
-                >
-                  <span style={styles.activityTime}>{entry.time}</span>
-                  <span style={styles.activityText}>{entry.text}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+          )}
         </section>
       </main>
     </div>
@@ -250,49 +207,19 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
-    display: "flex",
     minHeight: "100vh",
     backgroundColor: "#0b0d12",
     color: "#f5f6f8",
     fontFamily: '"Inter", "Segoe UI", system-ui, -apple-system, sans-serif',
   },
-  sidebar: {
-    width: 220,
-    borderRight: "1px solid #1e2330",
-    padding: "24px 16px",
-    display: "flex",
-    flexDirection: "column",
-    gap: 28,
-    flexShrink: 0,
-  },
   brand: {
     fontSize: 18,
     fontWeight: 700,
-    padding: "0 8px",
-  },
-  nav: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 4,
-  },
-  navItem: {
-    textAlign: "left",
-    padding: "10px 12px",
-    borderRadius: 8,
-    border: "none",
-    backgroundColor: "transparent",
-    color: "#9aa1b2",
-    fontSize: 14,
-    fontWeight: 500,
-    cursor: "pointer",
-  },
-  navItemActive: {
-    backgroundColor: "#1c2130",
-    color: "#f5f6f8",
-    fontWeight: 700,
   },
   main: {
-    flex: 1,
+    width: "100%",
+    maxWidth: 960,
+    margin: "0 auto",
     padding: 32,
     display: "flex",
     flexDirection: "column",
@@ -358,29 +285,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     fontWeight: 700,
   },
-  methodRow: {
-    display: "flex",
-    gap: 40,
-  },
-  methodItem: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 4,
-  },
-  methodLabel: {
+  emptyText: {
     margin: 0,
-    fontSize: 13,
+    fontSize: 14,
     color: "#9aa1b2",
-  },
-  methodAmount: {
-    margin: 0,
-    fontSize: 15,
-    fontWeight: 700,
-  },
-  bottomGrid: {
-    display: "grid",
-    gridTemplateColumns: "2fr 1fr",
-    gap: 32,
   },
   table: {
     width: "100%",
@@ -405,27 +313,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 6,
     fontSize: 12,
     fontWeight: 600,
-  },
-  activityList: {
-    listStyle: "none",
-    margin: 0,
-    padding: 0,
-    display: "flex",
-    flexDirection: "column",
-    gap: 16,
-  },
-  activityItem: {
-    display: "flex",
-    gap: 12,
-    fontSize: 13,
-  },
-  activityTime: {
-    color: "#9aa1b2",
-    flexShrink: 0,
-    width: 40,
-  },
-  activityText: {
-    color: "#f5f6f8",
-    fontWeight: 600,
+    textTransform: "capitalize",
   },
 };

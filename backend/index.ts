@@ -5,6 +5,7 @@ import { prisma } from "./lib/prisma";
 import authRoutes from "./routes/auth";
 import paymentsRoutes from "./routes/payments";
 import merchantsRoutes from "./routes/merchants";
+import transactionsRoutes from "./routes/transactions";
 
 const app = express();
 
@@ -33,6 +34,7 @@ app.get("/api/merchants/count", async (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/payments", paymentsRoutes);
 app.use("/api/merchants", merchantsRoutes);
+app.use("/api/transactions", transactionsRoutes);
 
 app.listen(PORT, () => {
   console.log(`PayFlow backend running on port ${PORT}`);

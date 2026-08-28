@@ -38,14 +38,21 @@ export default function Checkout() {
     }
   }, []);
 
-  const handlePay = async () => {
+  const validAmount = (): number | null => {
     setError(null);
     const numericAmount = Number(amount);
 
     if (!numericAmount || numericAmount < 10) {
       setError("Enter an amount of at least Rs 10");
-      return;
+      return null;
     }
+
+    return numericAmount;
+  };
+
+  const handlePayKhalti = async () => {
+    const numericAmount = validAmount();
+    if (numericAmount === null) return;
 
     setIsPaying(true);
 
@@ -66,6 +73,48 @@ export default function Checkout() {
     } catch {
       setError("Could not reach the server. Please try again.");
     } finally {
+      setIsPaying(false);
+    }
+  };
+
+  const handlePayEsewa = async () => {
+    const numericAmount = validAmount();
+    if (numericAmount === null) return;
+
+    setIsPaying(true);
+
+    try {
+      const res = await fetch("/api/payments/esewa/initiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchantSlug: slug, amount: numericAmount }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.message ?? "Could not start payment");
+        return;
+      }
+
+      // eSewa expects a signed HTML form POST, not a redirect URL - the
+      // signature was generated server-side (it needs the secret key),
+      // so we build the form here and submit it immediately.
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = data.formUrl;
+
+      Object.entries(data.fields).forEach(([name, value]) => {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        input.value = String(value);
+        form.appendChild(input);
+      });
+
+      document.body.appendChild(form);
+      form.submit();
+    } catch {
+      setError("Could not reach the server. Please try again.");
       setIsPaying(false);
     }
   };
@@ -120,10 +169,17 @@ export default function Checkout() {
 
         <button
           style={styles.payButton}
-          onClick={handlePay}
+          onClick={handlePayKhalti}
           disabled={isPaying || !merchant}
         >
           {isPaying ? "Starting payment..." : "Pay with Khalti"}
+        </button>
+        <button
+          style={{ ...styles.payButton, ...styles.esewaButton }}
+          onClick={handlePayEsewa}
+          disabled={isPaying || !merchant}
+        >
+          {isPaying ? "Starting payment..." : "Pay with eSewa"}
         </button>
       </div>
     </div>
@@ -189,6 +245,7 @@ const styles: Record<string, React.CSSProperties> = {
   payButton: {
     width: "100%",
     padding: 14,
+    marginTop: 10,
     backgroundColor: "#f5f6f8",
     color: "#0b0d12",
     border: "none",
@@ -196,6 +253,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     fontWeight: 700,
     cursor: "pointer",
+  },
+  esewaButton: {
+    backgroundColor: "#60bb46",
+    color: "#ffffff",
   },
   banner: {
     padding: "12px 16px",

@@ -24,7 +24,7 @@ model Transaction {
   amount        Decimal
   paymentMethod String
   status        String
-  pidx          String?  @unique
+  externalRef   String?  @unique
   createdAt     DateTime @default(now())
 
   merchant Merchant @relation(fields: [merchantId], references: [id])

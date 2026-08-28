@@ -1,10 +1,15 @@
 import express from "express";
 import crypto from "node:crypto";
 import { prisma } from "../lib/prisma";
+import { buildEsewaSignature } from "../lib/esewa";
 
 const router = express.Router();
 
 const KHALTI_BASE_URL = "https://dev.khalti.com/api/v2/epayment";
+const ESEWA_FORM_URL = "https://rc-epay.esewa.com.np/api/epay/main/v2/form";
+const ESEWA_STATUS_URL =
+  "https://rc.esewa.com.np/api/epay/transaction/status/";
+const ESEWA_PRODUCT_CODE = process.env.ESEWA_PRODUCT_CODE ?? "EPAYTEST";
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:5000";
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:5173";
 
@@ -60,7 +65,7 @@ router.post("/khalti/initiate", async (req, res) => {
         amount,
         paymentMethod: "khalti",
         status: "pending",
-        pidx: khaltiData.pidx,
+        externalRef: khaltiData.pidx,
       },
     });
 
@@ -106,7 +111,7 @@ router.get("/khalti/callback", async (req, res) => {
         : "failed";
 
     const transaction = await prisma.transaction.findUnique({
-      where: { pidx },
+      where: { externalRef: pidx },
       include: { merchant: true },
     });
 
@@ -115,7 +120,7 @@ router.get("/khalti/callback", async (req, res) => {
     }
 
     await prisma.transaction.update({
-      where: { pidx },
+      where: { externalRef: pidx },
       data: { status },
     });
 
@@ -124,6 +129,129 @@ router.get("/khalti/callback", async (req, res) => {
     );
   } catch (error) {
     console.error("Khalti callback error:", error);
+
+    return res.redirect(`${FRONTEND_URL}/?payment=error`);
+  }
+});
+
+router.post("/esewa/initiate", async (req, res) => {
+  try {
+    const { merchantSlug, amount } = req.body;
+
+    if (typeof merchantSlug !== "string" || !merchantSlug.trim()) {
+      return res.status(400).json({ message: "merchantSlug is required" });
+    }
+
+    if (typeof amount !== "number" || amount < 10) {
+      return res.status(400).json({
+        message: "amount is required and must be at least Rs 10",
+      });
+    }
+
+    const merchant = await prisma.merchant.findUnique({
+      where: { slug: merchantSlug },
+    });
+
+    if (!merchant) {
+      return res.status(404).json({ message: "Merchant not found" });
+    }
+
+    const transactionUuid = crypto.randomUUID();
+    const signature = buildEsewaSignature({
+      total_amount: amount,
+      transaction_uuid: transactionUuid,
+      product_code: ESEWA_PRODUCT_CODE,
+    });
+
+    await prisma.transaction.create({
+      data: {
+        merchantId: merchant.id,
+        amount,
+        paymentMethod: "esewa",
+        status: "pending",
+        externalRef: transactionUuid,
+      },
+    });
+
+    return res.status(200).json({
+      formUrl: ESEWA_FORM_URL,
+      fields: {
+        amount,
+        tax_amount: 0,
+        total_amount: amount,
+        transaction_uuid: transactionUuid,
+        product_code: ESEWA_PRODUCT_CODE,
+        product_service_charge: 0,
+        product_delivery_charge: 0,
+        success_url: `${BACKEND_URL}/api/payments/esewa/callback`,
+        failure_url: `${BACKEND_URL}/api/payments/esewa/callback`,
+        signed_field_names: "total_amount,transaction_uuid,product_code",
+        signature,
+      },
+    });
+  } catch (error) {
+    console.error("eSewa initiate error:", error);
+
+    return res.status(500).json({ message: "Something went wrong" });
+  }
+});
+
+router.get("/esewa/callback", async (req, res) => {
+  try {
+    const dataParam = req.query.data;
+
+    if (typeof dataParam !== "string") {
+      return res.redirect(`${FRONTEND_URL}/?payment=error`);
+    }
+
+    const decoded = JSON.parse(
+      Buffer.from(dataParam, "base64").toString("utf-8")
+    );
+    const transactionUuid = decoded.transaction_uuid;
+    const totalAmount = decoded.total_amount;
+    const productCode = decoded.product_code ?? ESEWA_PRODUCT_CODE;
+
+    if (!transactionUuid) {
+      return res.redirect(`${FRONTEND_URL}/?payment=error`);
+    }
+
+    const statusUrl = `${ESEWA_STATUS_URL}?product_code=${encodeURIComponent(
+      productCode
+    )}&total_amount=${encodeURIComponent(
+      totalAmount
+    )}&transaction_uuid=${encodeURIComponent(transactionUuid)}`;
+
+    const statusRes = await fetch(statusUrl);
+    const statusData = await statusRes.json();
+
+    // Only eSewa's own status-check response decides the outcome here -
+    // never the decoded redirect payload alone, which anyone could fake.
+    const status: string =
+      statusData.status === "COMPLETE"
+        ? "success"
+        : ["PENDING", "AMBIGUOUS"].includes(statusData.status)
+        ? "pending"
+        : "failed";
+
+    const transaction = await prisma.transaction.findUnique({
+      where: { externalRef: transactionUuid },
+      include: { merchant: true },
+    });
+
+    if (!transaction) {
+      return res.redirect(`${FRONTEND_URL}/?payment=error`);
+    }
+
+    await prisma.transaction.update({
+      where: { externalRef: transactionUuid },
+      data: { status },
+    });
+
+    return res.redirect(
+      `${FRONTEND_URL}/pay/${transaction.merchant.slug}?payment=${status}`
+    );
+  } catch (error) {
+    console.error("eSewa callback error:", error);
 
     return res.redirect(`${FRONTEND_URL}/?payment=error`);
   }
