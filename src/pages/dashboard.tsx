@@ -96,7 +96,11 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
   };
-
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("merchant");
+    onUnauthorized();
+  };
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     day: "numeric",
@@ -130,9 +134,14 @@ export default function Dashboard({ onUnauthorized }: DashboardProps) {
             </h1>
             <p style={styles.date}>{today}</p>
           </div>
-          <button style={styles.simulateButton} onClick={handleCopyLink}>
-            {linkCopied ? "Link copied!" : "Copy checkout link"}
-          </button>
+          <div style={styles.headerButtons}>
+            <button style={styles.simulateButton} onClick={handleCopyLink}>
+              {linkCopied ? "Link copied!" : "Copy checkout link"}
+            </button>
+            <button style={styles.logoutButton} onClick={handleLogout}>
+              Log out
+            </button>
+          </div>
         </header>
 
         <section style={styles.statGrid}>
@@ -241,12 +250,26 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#9aa1b2",
     fontSize: 14,
   },
+  headerButtons: {
+    display: "flex",
+    gap: 10,
+  },
   simulateButton: {
     padding: "10px 18px",
     backgroundColor: "transparent",
     border: "1px solid #2a2f3f",
     borderRadius: 10,
     color: "#f5f6f8",
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  logoutButton: {
+    padding: "10px 18px",
+    backgroundColor: "transparent",
+    border: "1px solid #2a2f3f",
+    borderRadius: 10,
+    color: "#9aa1b2",
     fontSize: 14,
     fontWeight: 600,
     cursor: "pointer",
