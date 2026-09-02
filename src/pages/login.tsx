@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { GoogleLogin } from "@react-oauth/google";
 
 interface LoginFormState {
   email: string;
@@ -16,7 +17,10 @@ interface LoginProps {
   onLoginSuccess: () => void;
 }
 
-export default function Login({ onSwitchToSignup, onLoginSuccess }: LoginProps) {
+export default function Login({
+  onSwitchToSignup,
+  onLoginSuccess,
+}: LoginProps) {
   const [form, setForm] = useState<LoginFormState>({
     email: "",
     password: "",
@@ -50,6 +54,36 @@ export default function Login({ onSwitchToSignup, onLoginSuccess }: LoginProps) 
 
       localStorage.setItem("token", data.token);
       localStorage.setItem("merchant", JSON.stringify(data.merchant));
+      onLoginSuccess();
+    } catch {
+      setError("Could not reach the server. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  const handleGoogleLogin = async (credential: string) => {
+    setError(null);
+    setIsSubmitting(true);
+
+    try {
+      const res = await fetch("/api/auth/google", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ credential }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.message ?? "Google login failed");
+        return;
+      }
+
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("merchant", JSON.stringify(data.merchant));
+
       onLoginSuccess();
     } catch {
       setError("Could not reach the server. Please try again.");
@@ -114,6 +148,21 @@ export default function Login({ onSwitchToSignup, onLoginSuccess }: LoginProps) 
             >
               Forgot password?
             </a>
+            <div style={styles.divider}>
+              <span>OR</span>
+            </div>
+
+            <GoogleLogin
+              onSuccess={(credentialResponse) => {
+                if (credentialResponse.credential) {
+                  handleGoogleLogin(credentialResponse.credential);
+                }
+              }}
+              onError={() => {
+                setError("Google login failed");
+              }}
+              useOneTap
+            />
 
             {error && <p style={styles.errorText}>{error}</p>}
 
@@ -286,5 +335,14 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 2,
     backgroundColor: "#5b7cfa",
     flexShrink: 0,
+  },
+  divider: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    margin: "20px 0",
+    color: "#5b6172",
+    fontSize: 12,
+    fontWeight: 600,
   },
 };

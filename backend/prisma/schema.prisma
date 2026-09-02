@@ -8,12 +8,14 @@ datasource db {
 }
 
 model Merchant {
-  id           String        @id @default(uuid())
-  businessName String
-  slug         String        @unique
-  email        String        @unique
-  passwordHash String
-  createdAt    DateTime      @default(now())
+  id            String        @id @default(uuid())
+  businessName  String
+  slug          String        @unique
+  email         String        @unique
+  passwordHash  String?
+  googleId      String?       @unique
+  profilePicture String?
+  createdAt     DateTime      @default(now())
 
   transactions Transaction[]
 }
