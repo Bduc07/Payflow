@@ -175,20 +175,6 @@ export default function Login({
               {isSubmitting ? "Logging in..." : "Log in"}
             </button>
           </form>
-
-          <p style={styles.signupText}>
-            New merchant?{" "}
-            <a
-              style={styles.link}
-              href="#create-account"
-              onClick={(e) => {
-                e.preventDefault();
-                onSwitchToSignup();
-              }}
-            >
-              Create an account
-            </a>
-          </p>
         </section>
 
         <section style={styles.infoSection}>
@@ -291,12 +277,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     fontWeight: 700,
     cursor: "pointer",
-  },
-  signupText: {
-    margin: "20px 0 0",
-    textAlign: "center",
-    fontSize: 13,
-    color: "#9aa1b2",
   },
   link: {
     color: "#7c9bff",
