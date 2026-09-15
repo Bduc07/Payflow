@@ -142,14 +142,6 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               autoComplete="current-password"
             />
 
-            <a
-              className="forgot-link"
-              style={styles.forgotLink}
-              href="#forgot-password"
-            >
-              Forgot password?
-            </a>
-
             <div style={styles.divider}>
               <span style={styles.dividerText}>OR</span>
             </div>
