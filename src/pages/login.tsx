@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useState, } from "react";
 import { GoogleLogin } from "@react-oauth/google";
+import type { FormEvent } from "react";
 
 interface LoginFormState {
   email: string;
@@ -157,7 +158,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               onError={() => {
                 setError("Google login failed");
               }}
-              useOneTap
+              width="350"
             />
 
             {error && <p style={styles.errorText}>{error}</p>}
