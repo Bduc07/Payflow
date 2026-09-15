@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { useState, type FormEvent } from "react";
 import { GoogleLogin } from "@react-oauth/google";
 
 interface LoginFormState {
@@ -13,14 +13,10 @@ const FEATURES: string[] = [
 ];
 
 interface LoginProps {
-  onSwitchToSignup: () => void;
   onLoginSuccess: () => void;
 }
 
-export default function Login({
-  onSwitchToSignup,
-  onLoginSuccess,
-}: LoginProps) {
+export default function Login({ onLoginSuccess }: LoginProps) {
   const [form, setForm] = useState<LoginFormState>({
     email: "",
     password: "",
@@ -97,7 +93,7 @@ export default function Login({
       <style>{`
         .text-input::placeholder { color: #5b6172; }
         .text-input:focus { border-color: #5b7cfa; }
-        .forgot-link:hover, .signup-text a:hover { text-decoration: underline; }
+        .forgot-link:hover { text-decoration: underline; }
         .login-button:hover { opacity: 0.9; }
         @media (max-width: 720px) {
           .login-card { grid-template-columns: 1fr !important; padding: 32px 24px !important; }
@@ -277,10 +273,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     fontWeight: 700,
     cursor: "pointer",
-  },
-  link: {
-    color: "#7c9bff",
-    textDecoration: "none",
   },
   infoSection: {
     display: "flex",
