@@ -1,4 +1,4 @@
-import { useState, } from "react";
+import { useState } from "react";
 import { GoogleLogin } from "@react-oauth/google";
 import type { FormEvent } from "react";
 
@@ -58,6 +58,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       setIsSubmitting(false);
     }
   };
+
   const handleGoogleLogin = async (credential: string) => {
     setError(null);
     setIsSubmitting(true);
@@ -96,6 +97,9 @@ export default function Login({ onLoginSuccess }: LoginProps) {
         .text-input:focus { border-color: #5b7cfa; }
         .forgot-link:hover { text-decoration: underline; }
         .login-button:hover { opacity: 0.9; }
+        .google-login-wrapper { display: flex; justify-content: center; width: 100%; }
+        .google-login-wrapper > div { width: 100% !important; }
+        .google-login-wrapper iframe { width: 100% !important; }
         @media (max-width: 720px) {
           .login-card { grid-template-columns: 1fr !important; padding: 32px 24px !important; }
         }
@@ -145,21 +149,24 @@ export default function Login({ onLoginSuccess }: LoginProps) {
             >
               Forgot password?
             </a>
+
             <div style={styles.divider}>
-              <span>OR</span>
+              <span style={styles.dividerText}>OR</span>
             </div>
 
-            <GoogleLogin
-              onSuccess={(credentialResponse) => {
-                if (credentialResponse.credential) {
-                  handleGoogleLogin(credentialResponse.credential);
-                }
-              }}
-              onError={() => {
-                setError("Google login failed");
-              }}
-              width="350"
-            />
+            <div className="google-login-wrapper" style={styles.googleWrapper}>
+              <GoogleLogin
+                onSuccess={(credentialResponse) => {
+                  if (credentialResponse.credential) {
+                    handleGoogleLogin(credentialResponse.credential);
+                  }
+                }}
+                onError={() => {
+                  setError("Google login failed");
+                }}
+                width="350"
+              />
+            </div>
 
             {error && <p style={styles.errorText}>{error}</p>}
 
@@ -259,6 +266,22 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#7c9bff",
     textDecoration: "none",
   },
+  divider: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    margin: "0 0 20px",
+    color: "#5b6172",
+    fontSize: 12,
+    fontWeight: 600,
+  },
+  dividerText: {
+    padding: "0 8px",
+  },
+  googleWrapper: {
+    marginBottom: 24,
+    minHeight: 44,
+  },
   errorText: {
     margin: "0 0 16px",
     fontSize: 13,
@@ -267,6 +290,7 @@ const styles: Record<string, React.CSSProperties> = {
   loginButton: {
     width: "100%",
     padding: 14,
+    marginTop: 4,
     backgroundColor: "#f5f6f8",
     color: "#0b0d12",
     border: "none",
@@ -308,14 +332,5 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 2,
     backgroundColor: "#5b7cfa",
     flexShrink: 0,
-  },
-  divider: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    margin: "20px 0",
-    color: "#5b6172",
-    fontSize: 12,
-    fontWeight: 600,
   },
 };
