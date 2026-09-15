@@ -12,7 +12,9 @@ export default function Checkout() {
   const [notFound, setNotFound] = useState(false);
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [isPaying, setIsPaying] = useState(false);
+  const [payingMethod, setPayingMethod] = useState<"khalti" | "esewa" | null>(
+    null
+  );
   const [paymentBanner, setPaymentBanner] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,7 +56,7 @@ export default function Checkout() {
     const numericAmount = validAmount();
     if (numericAmount === null) return;
 
-    setIsPaying(true);
+    setPayingMethod("khalti");
 
     try {
       const res = await fetch("/api/payments/khalti/initiate", {
@@ -73,7 +75,7 @@ export default function Checkout() {
     } catch {
       setError("Could not reach the server. Please try again.");
     } finally {
-      setIsPaying(false);
+      setPayingMethod(null);
     }
   };
 
@@ -81,7 +83,7 @@ export default function Checkout() {
     const numericAmount = validAmount();
     if (numericAmount === null) return;
 
-    setIsPaying(true);
+    setPayingMethod("esewa");
 
     try {
       const res = await fetch("/api/payments/esewa/initiate", {
@@ -115,7 +117,7 @@ export default function Checkout() {
       form.submit();
     } catch {
       setError("Could not reach the server. Please try again.");
-      setIsPaying(false);
+      setPayingMethod(null);
     }
   };
 
@@ -170,16 +172,16 @@ export default function Checkout() {
         <button
           style={styles.payButton}
           onClick={handlePayKhalti}
-          disabled={isPaying || !merchant}
+          disabled={payingMethod !== null || !merchant}
         >
-          {isPaying ? "Starting payment..." : "Pay with Khalti"}
+          {payingMethod === "khalti" ? "Starting payment..." : "Pay with Khalti"}
         </button>
         <button
           style={{ ...styles.payButton, ...styles.esewaButton }}
           onClick={handlePayEsewa}
-          disabled={isPaying || !merchant}
+          disabled={payingMethod !== null || !merchant}
         >
-          {isPaying ? "Starting payment..." : "Pay with eSewa"}
+          {payingMethod === "esewa" ? "Starting payment..." : "Pay with eSewa"}
         </button>
       </div>
     </div>
