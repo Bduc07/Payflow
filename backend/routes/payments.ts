@@ -2,8 +2,11 @@ import express from "express";
 import crypto from "node:crypto";
 import { prisma } from "../lib/prisma";
 import { buildEsewaSignature } from "../lib/esewa";
-
-const router = express.Router();
+import {
+  esewaPaymentStatus,
+  khaltiPaymentStatus,
+  type PaymentStatus,
+} from "../lib/payment-verification";
 
 const KHALTI_BASE_URL = "https://dev.khalti.com/api/v2/epayment";
 const ESEWA_FORM_URL = "https://rc-epay.esewa.com.np/api/epay/main/v2/form";
@@ -13,248 +16,255 @@ const ESEWA_PRODUCT_CODE = process.env.ESEWA_PRODUCT_CODE ?? "EPAYTEST";
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:5000";
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:5173";
 
-router.post("/khalti/initiate", async (req, res) => {
-  try {
-    const { merchantSlug, amount } = req.body;
+type VerificationTransactions = {
+  findUnique(query: {
+    where: { externalRef: string };
+    include: { merchant: true };
+  }): Promise<{ merchant: { slug: string } } | null>;
+  update(query: {
+    where: { externalRef: string };
+    data: { status: PaymentStatus };
+  }): Promise<unknown>;
+};
 
-    if (typeof merchantSlug !== "string" || !merchantSlug.trim()) {
-      return res.status(400).json({ message: "merchantSlug is required" });
-    }
+export function createPaymentsRouter(transactions: VerificationTransactions = prisma.transaction) {
+  const router = express.Router();
 
-    if (typeof amount !== "number" || amount < 10) {
-      return res.status(400).json({
-        message: "amount is required and must be at least Rs 10",
+  router.post("/khalti/initiate", async (req, res) => {
+    try {
+      const { merchantSlug, amount } = req.body;
+
+      if (typeof merchantSlug !== "string" || !merchantSlug.trim()) {
+        return res.status(400).json({ message: "merchantSlug is required" });
+      }
+
+      if (typeof amount !== "number" || amount < 10) {
+        return res.status(400).json({
+          message: "amount is required and must be at least Rs 10",
+        });
+      }
+
+      const merchant = await prisma.merchant.findUnique({
+        where: { slug: merchantSlug },
       });
-    }
 
-    const merchant = await prisma.merchant.findUnique({
-      where: { slug: merchantSlug },
-    });
+      if (!merchant) {
+        return res.status(404).json({ message: "Merchant not found" });
+      }
 
-    if (!merchant) {
-      return res.status(404).json({ message: "Merchant not found" });
-    }
-
-    const khaltiRes = await fetch(`${KHALTI_BASE_URL}/initiate/`, {
-      method: "POST",
-      headers: {
-        Authorization: `Key ${process.env.KHALTI_SECRET_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        return_url: `${BACKEND_URL}/api/payments/khalti/callback`,
-        website_url: FRONTEND_URL,
-        amount: Math.round(amount * 100),
-        purchase_order_id: crypto.randomUUID(),
-        purchase_order_name: `Payment to ${merchant.businessName}`,
-      }),
-    });
-
-    const khaltiData = await khaltiRes.json();
-
-    if (!khaltiRes.ok) {
-      console.error("Khalti initiate error:", khaltiData);
-      return res.status(502).json({
-        message: "Could not start Khalti payment",
+      const khaltiRes = await fetch(`${KHALTI_BASE_URL}/initiate/`, {
+        method: "POST",
+        headers: {
+          Authorization: `Key ${process.env.KHALTI_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          return_url: `${BACKEND_URL}/api/payments/khalti/callback`,
+          website_url: FRONTEND_URL,
+          amount: Math.round(amount * 100),
+          purchase_order_id: crypto.randomUUID(),
+          purchase_order_name: `Payment to ${merchant.businessName}`,
+        }),
       });
+
+      const khaltiData = await khaltiRes.json();
+
+      if (!khaltiRes.ok) {
+        console.error("Khalti initiate error:", khaltiData);
+        return res.status(502).json({
+          message: "Could not start Khalti payment",
+        });
+      }
+
+      await prisma.transaction.create({
+        data: {
+          merchantId: merchant.id,
+          amount,
+          paymentMethod: "khalti",
+          status: "pending",
+          externalRef: khaltiData.pidx,
+        },
+      });
+
+      return res.status(200).json({ payment_url: khaltiData.payment_url });
+    } catch (error) {
+      console.error("Khalti initiate error:", error);
+
+      return res.status(500).json({ message: "Something went wrong" });
     }
+  });
 
-    await prisma.transaction.create({
-      data: {
-        merchantId: merchant.id,
-        amount,
-        paymentMethod: "khalti",
-        status: "pending",
-        externalRef: khaltiData.pidx,
-      },
-    });
+  router.get("/khalti/callback", async (req, res) => {
+    const pidx = req.query.pidx;
 
-    return res.status(200).json({ payment_url: khaltiData.payment_url });
-  } catch (error) {
-    console.error("Khalti initiate error:", error);
-
-    return res.status(500).json({ message: "Something went wrong" });
-  }
-});
-
-router.get("/khalti/callback", async (req, res) => {
-  const pidx = req.query.pidx;
-
-  if (typeof pidx !== "string") {
-    return res.redirect(`${FRONTEND_URL}/?payment=error`);
-  }
-
-  try {
-    const lookupRes = await fetch(`${KHALTI_BASE_URL}/lookup/`, {
-      method: "POST",
-      headers: {
-        Authorization: `Key ${process.env.KHALTI_SECRET_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ pidx }),
-    });
-
-    const lookupData = await lookupRes.json();
-
-    if (!lookupRes.ok) {
-      console.error("Khalti lookup error:", lookupData);
+    if (typeof pidx !== "string") {
       return res.redirect(`${FRONTEND_URL}/?payment=error`);
     }
 
-    // Only Khalti's own lookup response decides the outcome here -
-    // never the query params on this redirect, which anyone could fake.
-    const status: string =
-      lookupData.status === "Completed"
-        ? "success"
-        : ["Pending", "Initiated"].includes(lookupData.status)
-        ? "pending"
-        : "failed";
+    try {
+      const lookupRes = await fetch(`${KHALTI_BASE_URL}/lookup/`, {
+        method: "POST",
+        headers: {
+          Authorization: `Key ${process.env.KHALTI_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ pidx }),
+      });
 
-    const transaction = await prisma.transaction.findUnique({
-      where: { externalRef: pidx },
-      include: { merchant: true },
-    });
+      const lookupData = await lookupRes.json();
 
-    if (!transaction) {
+      if (!lookupRes.ok) {
+        console.error("Khalti lookup error:", lookupData);
+        return res.redirect(`${FRONTEND_URL}/?payment=error`);
+      }
+
+      // Only Khalti's own lookup response decides the outcome here -
+      // never the query params on this redirect, which anyone could fake.
+      const status = khaltiPaymentStatus(lookupData.status);
+
+      const transaction = await transactions.findUnique({
+        where: { externalRef: pidx },
+        include: { merchant: true },
+      });
+
+      if (!transaction) {
+        return res.redirect(`${FRONTEND_URL}/?payment=error`);
+      }
+
+      await transactions.update({
+        where: { externalRef: pidx },
+        data: { status },
+      });
+
+      return res.redirect(
+        `${FRONTEND_URL}/pay/${transaction.merchant.slug}?payment=${status}`
+      );
+    } catch (error) {
+      console.error("Khalti callback error:", error);
+
       return res.redirect(`${FRONTEND_URL}/?payment=error`);
     }
+  });
 
-    await prisma.transaction.update({
-      where: { externalRef: pidx },
-      data: { status },
-    });
+  router.post("/esewa/initiate", async (req, res) => {
+    try {
+      const { merchantSlug, amount } = req.body;
 
-    return res.redirect(
-      `${FRONTEND_URL}/pay/${transaction.merchant.slug}?payment=${status}`
-    );
-  } catch (error) {
-    console.error("Khalti callback error:", error);
+      if (typeof merchantSlug !== "string" || !merchantSlug.trim()) {
+        return res.status(400).json({ message: "merchantSlug is required" });
+      }
 
-    return res.redirect(`${FRONTEND_URL}/?payment=error`);
-  }
-});
+      if (typeof amount !== "number" || amount < 10) {
+        return res.status(400).json({
+          message: "amount is required and must be at least Rs 10",
+        });
+      }
 
-router.post("/esewa/initiate", async (req, res) => {
-  try {
-    const { merchantSlug, amount } = req.body;
-
-    if (typeof merchantSlug !== "string" || !merchantSlug.trim()) {
-      return res.status(400).json({ message: "merchantSlug is required" });
-    }
-
-    if (typeof amount !== "number" || amount < 10) {
-      return res.status(400).json({
-        message: "amount is required and must be at least Rs 10",
+      const merchant = await prisma.merchant.findUnique({
+        where: { slug: merchantSlug },
       });
-    }
 
-    const merchant = await prisma.merchant.findUnique({
-      where: { slug: merchantSlug },
-    });
+      if (!merchant) {
+        return res.status(404).json({ message: "Merchant not found" });
+      }
 
-    if (!merchant) {
-      return res.status(404).json({ message: "Merchant not found" });
-    }
-
-    const transactionUuid = crypto.randomUUID();
-    const signature = buildEsewaSignature({
-      total_amount: amount,
-      transaction_uuid: transactionUuid,
-      product_code: ESEWA_PRODUCT_CODE,
-    });
-
-    await prisma.transaction.create({
-      data: {
-        merchantId: merchant.id,
-        amount,
-        paymentMethod: "esewa",
-        status: "pending",
-        externalRef: transactionUuid,
-      },
-    });
-
-    return res.status(200).json({
-      formUrl: ESEWA_FORM_URL,
-      fields: {
-        amount,
-        tax_amount: 0,
+      const transactionUuid = crypto.randomUUID();
+      const signature = buildEsewaSignature({
         total_amount: amount,
         transaction_uuid: transactionUuid,
         product_code: ESEWA_PRODUCT_CODE,
-        product_service_charge: 0,
-        product_delivery_charge: 0,
-        success_url: `${BACKEND_URL}/api/payments/esewa/callback`,
-        failure_url: `${BACKEND_URL}/api/payments/esewa/callback`,
-        signed_field_names: "total_amount,transaction_uuid,product_code",
-        signature,
-      },
-    });
-  } catch (error) {
-    console.error("eSewa initiate error:", error);
+      });
 
-    return res.status(500).json({ message: "Something went wrong" });
-  }
-});
+      await prisma.transaction.create({
+        data: {
+          merchantId: merchant.id,
+          amount,
+          paymentMethod: "esewa",
+          status: "pending",
+          externalRef: transactionUuid,
+        },
+      });
 
-router.get("/esewa/callback", async (req, res) => {
-  try {
-    const dataParam = req.query.data;
+      return res.status(200).json({
+        formUrl: ESEWA_FORM_URL,
+        fields: {
+          amount,
+          tax_amount: 0,
+          total_amount: amount,
+          transaction_uuid: transactionUuid,
+          product_code: ESEWA_PRODUCT_CODE,
+          product_service_charge: 0,
+          product_delivery_charge: 0,
+          success_url: `${BACKEND_URL}/api/payments/esewa/callback`,
+          failure_url: `${BACKEND_URL}/api/payments/esewa/callback`,
+          signed_field_names: "total_amount,transaction_uuid,product_code",
+          signature,
+        },
+      });
+    } catch (error) {
+      console.error("eSewa initiate error:", error);
 
-    if (typeof dataParam !== "string") {
+      return res.status(500).json({ message: "Something went wrong" });
+    }
+  });
+
+  router.get("/esewa/callback", async (req, res) => {
+    try {
+      const dataParam = req.query.data;
+
+      if (typeof dataParam !== "string") {
+        return res.redirect(`${FRONTEND_URL}/?payment=error`);
+      }
+
+      const decoded = JSON.parse(
+        Buffer.from(dataParam, "base64").toString("utf-8")
+      );
+      const transactionUuid = decoded.transaction_uuid;
+      const totalAmount = decoded.total_amount;
+      const productCode = decoded.product_code ?? ESEWA_PRODUCT_CODE;
+
+      if (!transactionUuid) {
+        return res.redirect(`${FRONTEND_URL}/?payment=error`);
+      }
+
+      const statusUrl = `${ESEWA_STATUS_URL}?product_code=${encodeURIComponent(
+        productCode
+      )}&total_amount=${encodeURIComponent(
+        totalAmount
+      )}&transaction_uuid=${encodeURIComponent(transactionUuid)}`;
+
+      const statusRes = await fetch(statusUrl);
+      const statusData = await statusRes.json();
+
+      // Only eSewa's own status-check response decides the outcome here -
+      // never the decoded redirect payload alone, which anyone could fake.
+      const status = esewaPaymentStatus(statusData.status);
+
+      const transaction = await transactions.findUnique({
+        where: { externalRef: transactionUuid },
+        include: { merchant: true },
+      });
+
+      if (!transaction) {
+        return res.redirect(`${FRONTEND_URL}/?payment=error`);
+      }
+
+      await transactions.update({
+        where: { externalRef: transactionUuid },
+        data: { status },
+      });
+
+      return res.redirect(
+        `${FRONTEND_URL}/pay/${transaction.merchant.slug}?payment=${status}`
+      );
+    } catch (error) {
+      console.error("eSewa callback error:", error);
+
       return res.redirect(`${FRONTEND_URL}/?payment=error`);
     }
+  });
 
-    const decoded = JSON.parse(
-      Buffer.from(dataParam, "base64").toString("utf-8")
-    );
-    const transactionUuid = decoded.transaction_uuid;
-    const totalAmount = decoded.total_amount;
-    const productCode = decoded.product_code ?? ESEWA_PRODUCT_CODE;
+  return router;
+}
 
-    if (!transactionUuid) {
-      return res.redirect(`${FRONTEND_URL}/?payment=error`);
-    }
-
-    const statusUrl = `${ESEWA_STATUS_URL}?product_code=${encodeURIComponent(
-      productCode
-    )}&total_amount=${encodeURIComponent(
-      totalAmount
-    )}&transaction_uuid=${encodeURIComponent(transactionUuid)}`;
-
-    const statusRes = await fetch(statusUrl);
-    const statusData = await statusRes.json();
-
-    // Only eSewa's own status-check response decides the outcome here -
-    // never the decoded redirect payload alone, which anyone could fake.
-    const status: string =
-      statusData.status === "COMPLETE"
-        ? "success"
-        : ["PENDING", "AMBIGUOUS"].includes(statusData.status)
-        ? "pending"
-        : "failed";
-
-    const transaction = await prisma.transaction.findUnique({
-      where: { externalRef: transactionUuid },
-      include: { merchant: true },
-    });
-
-    if (!transaction) {
-      return res.redirect(`${FRONTEND_URL}/?payment=error`);
-    }
-
-    await prisma.transaction.update({
-      where: { externalRef: transactionUuid },
-      data: { status },
-    });
-
-    return res.redirect(
-      `${FRONTEND_URL}/pay/${transaction.merchant.slug}?payment=${status}`
-    );
-  } catch (error) {
-    console.error("eSewa callback error:", error);
-
-    return res.redirect(`${FRONTEND_URL}/?payment=error`);
-  }
-});
-
-export default router;
+export default createPaymentsRouter();
